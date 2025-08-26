@@ -8,7 +8,7 @@
 
 //--- Input Parameters
 // General Parameters
-input int AnalysisPeriod = 7; // Number of days for historical analysis
+input int AnalysisPeriod = 365*5; // Number of days for historical analysis
 input ENUM_TIMEFRAMES Timeframe = PERIOD_H1; // Trading timeframe
 // Removed AssetClasses array to avoid input array issues
 input string RiskManagementMode = "FixedLot"; // "FixedLot" or "Risk-Based"
@@ -236,6 +236,59 @@ void OnDeinit(const int reason)
     ObjectsDeleteAll(0, OBJ_BUTTON, 0, 0);
 }
 //+------------------------------------------------------------------+
+//| Check if Strategy has Open Position                              |
+//+------------------------------------------------------------------+
+bool HasStrategyOpenPosition(ENUM_STRATEGY strategy)
+{
+    for(int i = 0; i < PositionsTotal(); i++) {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket > 0 && PositionSelectByTicket(ticket)) {
+            if(PositionGetInteger(POSITION_MAGIC) == GetStrategyMagicNumber(strategy)) {
+                Print("Strategy ", GetStrategyName(strategy), " already has open position: ", ticket);
+                return true;
+            }
+        }
+    }
+    
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Display Strategy Position Status                                 |
+//+------------------------------------------------------------------+
+void DisplayStrategyPositionStatus()
+{
+    string strategies[] = {"Scalping", "Swing", "Breakout", "MeanRev"};
+    
+    Print("=== STRATEGY POSITION STATUS ===");
+    for(int i = 0; i < ArraySize(strategies); i++) {
+        int position_count = GetStrategyOpenPositionCount(strategies[i]);
+        string status = (position_count > 0) ? "ACTIVE (" + IntegerToString(position_count) + " positions)" : "AVAILABLE";
+        Print(strategies[i], ": ", status);
+    }
+    Print("================================");
+}
+
+//+------------------------------------------------------------------+
+//| Get Strategy Open Position Count                                 |
+//+------------------------------------------------------------------+
+int GetStrategyOpenPositionCount(string strategy)
+{
+    int count = 0;
+    
+    for(int i = 0; i < PositionsTotal(); i++) {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket > 0 && PositionSelectByTicket(ticket)) {
+            if(PositionGetInteger(POSITION_MAGIC) == GetStrategyMagicNumber(GetStrategyIndex(strategy))) {
+                count++;
+            }
+        }
+    }
+    
+    return count;
+}
+
+//+------------------------------------------------------------------+
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick()
@@ -256,17 +309,44 @@ void OnTick()
         double scores[] = {scalping_score, swing_score, breakout_score, mean_reversion_score};
         int best_strategy_index = ArrayMaximum(scores, 0, ArraySize(scores));
         
-        // Step 3: Execute Selected Strategy
+        // Step 3: Display Strategy Position Status
+        DisplayStrategyPositionStatus();
+        
+        // Step 4: Execute Selected Strategy only if it doesn't have open position
         switch(best_strategy_index)
         {
-            case 0: ExecuteScalping(); break;
-            case 1: ExecuteSwingTrading(); break;
-            case 2: ExecuteBreakout(); break;
-            case 3: ExecuteMeanReversion(); break;
+            case 0: 
+                if(!HasStrategyOpenPosition(STRATEGY_SCALPING)) {
+                    ExecuteScalping(); 
+                } else {
+                    Print("Scalping strategy already has open position - skipping execution");
+                }
+                break;
+            case 1: 
+                if(!HasStrategyOpenPosition(STRATEGY_SWING)) {
+                    ExecuteSwingTrading(); 
+                } else {
+                    Print("Swing strategy already has open position - skipping execution");
+                }
+                break;
+            case 2: 
+                if(!HasStrategyOpenPosition(STRATEGY_BREAKOUT)) {
+                    ExecuteBreakout(); 
+                } else {
+                    Print("Breakout strategy already has open position - skipping execution");
+                }
+                break;
+            case 3: 
+                if(!HasStrategyOpenPosition(STRATEGY_MEANREV)) {
+                    ExecuteMeanReversion(); 
+                } else {
+                    Print("MeanReversion strategy already has open position - skipping execution");
+                }
+                break;
             default: Print("No valid strategy selected."); break;
         }
         
-        // Step 4: Update Dashboard
+        // Step 5: Update Dashboard
         UpdateDashboard();
         
         last_analysis_time = TimeCurrent();
@@ -281,6 +361,63 @@ void OnTick()
         UpdateDashboard();
         last_dashboard_update = TimeCurrent();
     }
+}
+
+//+------------------------------------------------------------------+
+//| Create Dynamic Configuration Parameter Strings                   |
+//+------------------------------------------------------------------+
+string GetScalpingConfigString()
+{
+    return StringFormat("BB(%d,2) | ATR(14) | SL:%.1fx | TP:%.1fx", 
+        ScalpingBollingerBandsPeriod, ScalpingSL_ATR_Multiplier, ScalpingTP_ATR_Multiplier);
+}
+
+string GetSwingConfigString()
+{
+    return StringFormat("RSI(%d) | MA(%d,%d) | SL:%.1fx | TP:%.1fx", 
+        RSIPeriod, FastMAPeriod, SlowMAPeriod, SwingSL_ATR_Multiplier, SwingTP_ATR_Multiplier);
+}
+
+string GetBreakoutConfigString()
+{
+    string pivot_tf = (PivotPointPeriodTF == PERIOD_D1) ? "D1" : 
+                     (PivotPointPeriodTF == PERIOD_H4) ? "H4" : "H1";
+    return StringFormat("Pivot(%s) | Vol(%.1fx) | SL:%.1fx | TP:%.1fx", 
+        pivot_tf, VolumeThreshold, BreakoutSL_ATR_Multiplier, BreakoutTP_ATR_Multiplier);
+}
+
+string GetMeanRevConfigString()
+{
+    return StringFormat("BB(%d,%.1f) | ATR(14) | SL:%.1fx | TP:%.1fx", 
+        ScalpingBollingerBandsPeriod, MeanReversionBollingerBandsDeviation, 
+        MeanReversionSL_ATR_Multiplier, MeanReversionTP_ATR_Multiplier);
+}
+
+string GetMarketConfigString()
+{
+    string timeframe_str = (Timeframe == PERIOD_H1) ? "H1" : 
+                          (Timeframe == PERIOD_H4) ? "H4" : 
+                          (Timeframe == PERIOD_D1) ? "D1" : "M15";
+    return StringFormat("TF:%s | ATR(14) | News(30min) | Lot:%.2f", 
+        timeframe_str, 0.01); // Using hard-coded 0.01 as per previous change
+}
+
+string GetRiskConfigString()
+{
+    return StringFormat("Mode:%s | Risk:%.1f%% | Lot:%.2f", 
+        RiskManagementMode, RiskPercentage, 0.01); // Using hard-coded 0.01
+}
+
+string GetTimeframeConfigString()
+{
+    string main_tf = (Timeframe == PERIOD_H1) ? "H1" : 
+                    (Timeframe == PERIOD_H4) ? "H4" : 
+                    (Timeframe == PERIOD_D1) ? "D1" : "M15";
+    string pivot_tf = (PivotPointPeriodTF == PERIOD_D1) ? "D1" : 
+                     (PivotPointPeriodTF == PERIOD_H4) ? "H4" : "H1";
+    int analysis_days = AnalysisPeriod / 365; // Convert from days to years for display
+    return StringFormat("Main:%s | Pivot:%s | Analysis:%d days", 
+        main_tf, pivot_tf, AnalysisPeriod);
 }
 
 //+------------------------------------------------------------------+
@@ -363,33 +500,33 @@ void CreateDashboard()
     CreateButton("ConfigHeader1", "Strategy", 500, 195, 80, 20, clrDarkOrange, clrWhite, 9, false);
     CreateButton("ConfigHeader2", "Parameters", 580, 195, 220, 20, clrDarkOrange, clrWhite, 9, false);
     
-    // Scalping Configuration Row
+    // Scalping Configuration Row - Using dynamic config
     CreateButton("ScalpingConfigRow", "Scalping", 500, 175, 80, 18, clrDarkSlateGray, clrWhite, 8, false);
-    CreateButton("ScalpingConfigParams", "BB(20,2) | ATR(14) | SL:1.0x | TP:2.0x", 580, 175, 220, 18, clrDarkSlateGray, clrWhite, 7, false);
+    CreateButton("ScalpingConfigParams", GetScalpingConfigString(), 580, 175, 220, 18, clrDarkSlateGray, clrWhite, 7, false);
     
-    // Swing Configuration Row
+    // Swing Configuration Row - Using dynamic config
     CreateButton("SwingConfigRow", "Swing", 500, 157, 80, 18, clrDarkSlateGray, clrWhite, 8, false);
-    CreateButton("SwingConfigParams", "RSI(14) | MA(9,21) | SL:1.5x | TP:3.0x", 580, 157, 220, 18, clrDarkSlateGray, clrWhite, 7, false);
+    CreateButton("SwingConfigParams", GetSwingConfigString(), 580, 157, 220, 18, clrDarkSlateGray, clrWhite, 7, false);
     
-    // Breakout Configuration Row
+    // Breakout Configuration Row - Using dynamic config
     CreateButton("BreakoutConfigRow", "Breakout", 500, 139, 80, 18, clrDarkSlateGray, clrWhite, 8, false);
-    CreateButton("BreakoutConfigParams", "Pivot(D1) | Vol(1.2x) | SL:1.0x | TP:2.0x", 580, 139, 220, 18, clrDarkSlateGray, clrWhite, 7, false);
+    CreateButton("BreakoutConfigParams", GetBreakoutConfigString(), 580, 139, 220, 18, clrDarkSlateGray, clrWhite, 7, false);
     
-    // Mean Reversion Configuration Row
+    // Mean Reversion Configuration Row - Using dynamic config
     CreateButton("MeanRevConfigRow", "MeanRev", 500, 121, 80, 18, clrDarkSlateGray, clrWhite, 8, false);
-    CreateButton("MeanRevConfigParams", "BB(20,2.0) | ATR(14) | SL:1.0x | TP:2.0x", 580, 121, 220, 18, clrDarkSlateGray, clrWhite, 7, false);
+    CreateButton("MeanRevConfigParams", GetMeanRevConfigString(), 580, 121, 220, 18, clrDarkSlateGray, clrWhite, 7, false);
     
-    // Market Conditions Configuration
+    // Market Conditions Configuration - Using dynamic config
     CreateButton("MarketConfigTitle", "Market Conditions", 500, 103, 300, 18, clrDarkCyan, clrWhite, 10, false);
-    CreateButton("MarketConfigParams", "Trend(20) | Vol(14) | News(30min) | Lot:0.01", 500, 85, 300, 16, clrDarkGray, clrWhite, 8, false);
+    CreateButton("MarketConfigParams", GetMarketConfigString(), 500, 85, 300, 16, clrDarkGray, clrWhite, 8, false);
     
-    // Risk Management Configuration
+    // Risk Management Configuration - Using dynamic config
     CreateButton("RiskConfigTitle", "Risk Management", 500, 67, 300, 18, clrDarkCyan, clrWhite, 10, false);
-    CreateButton("RiskConfigParams", "Risk:0.05% | MaxPos:1 | Trailing:1.5x | Partial:50%", 500, 49, 300, 16, clrDarkGray, clrWhite, 8, false);
+    CreateButton("RiskConfigParams", GetRiskConfigString(), 500, 49, 300, 16, clrDarkGray, clrWhite, 8, false);
     
-    // Timeframe Configuration
+    // Timeframe Configuration - Using dynamic config
     CreateButton("TimeframeConfigTitle", "Timeframe Settings", 500, 31, 300, 18, clrDarkCyan, clrWhite, 10, false);
-    CreateButton("TimeframeConfigParams", "Main:H1 | Pivot:H4/D1 | Analysis:7 days", 500, 13, 300, 16, clrDarkGray, clrWhite, 8, false);
+    CreateButton("TimeframeConfigParams", GetTimeframeConfigString(), 500, 13, 300, 16, clrDarkGray, clrWhite, 8, false);
     
     ChartRedraw();
 }
@@ -488,9 +625,24 @@ void UpdateStrategyPerformanceTable(string strategy_prefix, int strategy_index, 
     // Update score
     UpdateButton(strategy_prefix + "Score", StringFormat("%.2f", score));
     
-    // Update status based on score
-    string status = (score > 0.5) ? "ACTIVE" : "Inactive";
-    color status_bg_color = (score > 0.5) ? clrDarkGreen : clrDarkGray;
+    // Update status based on score and position status
+    ENUM_STRATEGY strategy_enum = (ENUM_STRATEGY)strategy_index;
+    bool has_open_position = HasStrategyOpenPosition(strategy_enum);
+    
+    string status;
+    color status_bg_color;
+    
+    if(has_open_position) {
+        status = "ACTIVE";
+        status_bg_color = clrDarkOrange;
+    } else if(score > 0.5) {
+        status = "READY";
+        status_bg_color = clrDarkGreen;
+    } else {
+        status = "Inactive";
+        status_bg_color = clrDarkGray;
+    }
+    
     UpdateButton(strategy_prefix + "Status", status, clrWhite, status_bg_color);
     
     // Update trades count
@@ -551,14 +703,14 @@ int CountOpenPositionsForStrategy(int strategy_index)
 //+------------------------------------------------------------------+
 void UpdateOverallPerformanceTable()
 {
-    // Update active strategies count based on scores
+    // Update active strategies count based on scores and position status
     int active_strategies = 0;
-    if(scalping_score > 0.5) active_strategies++;
-    if(swing_score > 0.5) active_strategies++;
-    if(breakout_score > 0.5) active_strategies++;
-    if(mean_reversion_score > 0.5) active_strategies++;
+    if(scalping_score > 0.5 && !HasStrategyOpenPosition(STRATEGY_SCALPING)) active_strategies++;
+    if(swing_score > 0.5 && !HasStrategyOpenPosition(STRATEGY_SWING)) active_strategies++;
+    if(breakout_score > 0.5 && !HasStrategyOpenPosition(STRATEGY_BREAKOUT)) active_strategies++;
+    if(mean_reversion_score > 0.5 && !HasStrategyOpenPosition(STRATEGY_MEANREV)) active_strategies++;
     
-    UpdateButton("ActiveStrategiesLabel", StringFormat("Active: %d", active_strategies));
+    UpdateButton("ActiveStrategiesLabel", StringFormat("Available: %d", active_strategies));
     
     // Calculate overall win rate
     double overall_win_rate = CalculateOverallWinRate();
@@ -625,9 +777,14 @@ double CalculateOverallProfitFactor()
 //+------------------------------------------------------------------+
 void UpdateConfigurationTable()
 {
-    // This function updates the configuration display
-    // The configuration is static for now, but could be made dynamic
-    // based on actual parameter values
+    // Update configuration display with dynamic values
+    UpdateButton("ScalpingConfigParams", GetScalpingConfigString());
+    UpdateButton("SwingConfigParams", GetSwingConfigString());
+    UpdateButton("BreakoutConfigParams", GetBreakoutConfigString());
+    UpdateButton("MeanRevConfigParams", GetMeanRevConfigString());
+    UpdateButton("MarketConfigParams", GetMarketConfigString());
+    UpdateButton("RiskConfigParams", GetRiskConfigString());
+    UpdateButton("TimeframeConfigParams", GetTimeframeConfigString());
 }
 
 //+------------------------------------------------------------------+
@@ -974,6 +1131,8 @@ void OpenSellOrder(string strategy)
 //+------------------------------------------------------------------+
 double CalculateLotSize(string strategy)
 {
+    // COMMENTED OUT: Original risk management logic
+    /*
     if(StringCompare(RiskManagementMode, "FixedLot") == 0)
     {
         return FixedLotSize;
@@ -999,6 +1158,10 @@ double CalculateLotSize(string strategy)
         // Default to fixed lot size
         return FixedLotSize;
     }
+    */
+    
+    // HARD CODED: Return fixed lot size of 0.01 for all strategies
+    return 0.01;
 }
 
 double CalculateStopLoss(string strategy)
