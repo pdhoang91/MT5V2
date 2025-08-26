@@ -52,6 +52,38 @@ datetime last_analysis_time = 0;
 // Magic Number for Orders
 #define MAGIC_NUMBER 123456
 
+// Strategy enumeration
+enum ENUM_STRATEGY {
+    STRATEGY_SCALPING = 0,
+    STRATEGY_SWING = 1,
+    STRATEGY_BREAKOUT = 2,
+    STRATEGY_MEANREV = 3
+};
+
+// Function to get magic number for a strategy
+ulong GetStrategyMagicNumber(ENUM_STRATEGY strategy)
+{
+    switch(strategy) {
+        case STRATEGY_SCALPING: return MAGIC_NUMBER + 1;
+        case STRATEGY_SWING: return MAGIC_NUMBER + 2;
+        case STRATEGY_BREAKOUT: return MAGIC_NUMBER + 3;
+        case STRATEGY_MEANREV: return MAGIC_NUMBER + 4;
+        default: return MAGIC_NUMBER;
+    }
+}
+
+// Function to get strategy name
+string GetStrategyName(ENUM_STRATEGY strategy)
+{
+    switch(strategy) {
+        case STRATEGY_SCALPING: return "Scalping";
+        case STRATEGY_SWING: return "Swing";
+        case STRATEGY_BREAKOUT: return "Breakout";
+        case STRATEGY_MEANREV: return "MeanRev";
+        default: return "Unknown";
+    }
+}
+
 //--- Dashboard Variables
 double current_atr = 0.0;
 double current_sl = 0.0;
@@ -61,6 +93,22 @@ double swing_score = 0.0;
 double breakout_score = 0.0;
 double mean_reversion_score = 0.0;
 
+// Performance Tracking Variables
+struct StrategyPerformance {
+    string strategy_name;
+    int total_trades;
+    int winning_trades;
+    double total_profit;
+    double max_drawdown;
+    double current_drawdown;
+    double win_rate;
+    double avg_profit;
+    double profit_factor;
+    int open_positions;
+};
+
+StrategyPerformance strategy_stats[4]; // For 4 strategies
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
@@ -68,7 +116,116 @@ int OnInit()
 {
     // Khởi tạo dashboard
     CreateDashboard();
+    InitializePerformanceTracking();
     return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Initialize Performance Tracking                                  |
+//+------------------------------------------------------------------+
+void InitializePerformanceTracking()
+{
+    string strategy_names[] = {"Scalping", "Swing", "Breakout", "MeanRev"};
+    
+    for(int i = 0; i < 4; i++) {
+        strategy_stats[i].strategy_name = strategy_names[i];
+        strategy_stats[i].total_trades = 0;
+        strategy_stats[i].winning_trades = 0;
+        strategy_stats[i].total_profit = 0.0;
+        strategy_stats[i].max_drawdown = 0.0;
+        strategy_stats[i].current_drawdown = 0.0;
+        strategy_stats[i].win_rate = 0.0;
+        strategy_stats[i].avg_profit = 0.0;
+        strategy_stats[i].profit_factor = 0.0;
+        strategy_stats[i].open_positions = 0;
+    }
+    
+    LoadHistoricalPerformance();
+}
+
+//+------------------------------------------------------------------+
+//| Load Historical Performance Data                                |
+//+------------------------------------------------------------------+
+void LoadHistoricalPerformance()
+{
+    datetime start_time = TimeCurrent() - (AnalysisPeriod * 24 * 60 * 60);
+    
+    for(int i = 0; i < 4; i++) {
+        CalculateStrategyPerformance(strategy_stats[i], start_time);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Strategy Performance                                   |
+//+------------------------------------------------------------------+
+void CalculateStrategyPerformance(StrategyPerformance &stats, datetime start_time)
+{
+    double total_profit = 0.0;
+    double total_loss = 0.0;
+    int winning_trades = 0;
+    int total_trades = 0;
+    
+    HistorySelect(start_time, TimeCurrent());
+    int deals = HistoryDealsTotal();
+    
+    // Get strategy magic number
+    ENUM_STRATEGY strategy_enum = GetStrategyIndex(stats.strategy_name);
+    ulong strategy_magic = GetStrategyMagicNumber(strategy_enum);
+    
+    for(int i = 0; i < deals; i++) {
+        ulong deal_ticket = HistoryDealGetTicket(i);
+        if(deal_ticket > 0) {
+            string deal_comment = HistoryDealGetString(deal_ticket, DEAL_COMMENT);
+            double deal_profit = HistoryDealGetDouble(deal_ticket, DEAL_PROFIT);
+            ENUM_DEAL_ENTRY deal_entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal_ticket, DEAL_ENTRY);
+            long deal_magic = HistoryDealGetInteger(deal_ticket, DEAL_MAGIC);
+            
+            if(deal_entry == DEAL_ENTRY_OUT && deal_profit != 0.0) {
+                // Check if deal belongs to this strategy by magic number
+                if(deal_magic == strategy_magic) {
+                    total_trades++;
+                    
+                    if(deal_profit > 0) {
+                        winning_trades++;
+                        total_profit += deal_profit;
+                    } else {
+                        total_loss += MathAbs(deal_profit);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Count open positions for this strategy using magic number
+    stats.open_positions = 0;
+    for(int i = 0; i < PositionsTotal(); i++) {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket > 0 && PositionSelectByTicket(ticket)) {
+            if(PositionGetInteger(POSITION_MAGIC) == strategy_magic) {
+                stats.open_positions++;
+            }
+        }
+    }
+    
+    // Update statistics
+    stats.total_trades = total_trades;
+    stats.winning_trades = winning_trades;
+    stats.total_profit = total_profit - total_loss;
+    stats.win_rate = (total_trades > 0) ? (double)winning_trades / total_trades : 0.0;
+    stats.avg_profit = (total_trades > 0) ? stats.total_profit / total_trades : 0.0;
+    stats.profit_factor = (total_loss > 0) ? total_profit / total_loss : 0.0;
+}
+
+//+------------------------------------------------------------------+
+//| Get Strategy Index from String                                   |
+//+------------------------------------------------------------------+
+ENUM_STRATEGY GetStrategyIndex(string strategy_name)
+{
+    if(StringCompare(strategy_name, "Scalping") == 0) return STRATEGY_SCALPING;
+    if(StringCompare(strategy_name, "Swing") == 0) return STRATEGY_SWING;
+    if(StringCompare(strategy_name, "Breakout") == 0) return STRATEGY_BREAKOUT;
+    if(StringCompare(strategy_name, "MeanRev") == 0) return STRATEGY_MEANREV;
+    return STRATEGY_SCALPING; // Default
 }
 //+------------------------------------------------------------------+
 //| Expert deinitialization function                                 |
@@ -86,6 +243,9 @@ void OnTick()
     // Perform analysis once a day
     if(TimeCurrent() - last_analysis_time > 24 * 3600)
     {
+        // Reload performance data
+        LoadHistoricalPerformance();
+        
         // Step 1: Analyze Historical Data
         scalping_score = AnalyzeScalping();
         swing_score = AnalyzeSwingTrading();
@@ -110,6 +270,16 @@ void OnTick()
         UpdateDashboard();
         
         last_analysis_time = TimeCurrent();
+    }
+    
+    // Update dashboard every minute for real-time performance display
+    static datetime last_dashboard_update = 0;
+    if(TimeCurrent() - last_dashboard_update > 60) // Update every minute
+    {
+        // Reload performance data for real-time updates
+        LoadHistoricalPerformance();
+        UpdateDashboard();
+        last_dashboard_update = TimeCurrent();
     }
 }
 
@@ -265,6 +435,9 @@ void UpdateButton(string name, string text, color text_color = clrWhite, color b
 //+------------------------------------------------------------------+
 void UpdateDashboard()
 {
+    // Reload performance data
+    LoadHistoricalPerformance();
+    
     // Update market information
     current_atr = GetCurrentATR();
     UpdateButton("ATRLabel", StringFormat("ATR: %.4f", current_atr));
@@ -279,7 +452,10 @@ void UpdateDashboard()
     UpdateButton("TrendStrengthLabel", StringFormat("Trend: %s", trend_status), clrWhite, trend_bg_color);
     
     // Update position information
-    int total_positions = 0; // Placeholder - should count actual positions
+    int total_positions = 0;
+    for(int i = 0; i < 4; i++) {
+        total_positions += strategy_stats[i].open_positions;
+    }
     UpdateButton("TotalPositionsLabel", StringFormat("Total: %d", total_positions));
     
     // Update news filter status (placeholder for now)
@@ -287,11 +463,11 @@ void UpdateDashboard()
     color news_bg_color = clrDarkGreen;
     UpdateButton("NewsFilterLabel", StringFormat("News: %s", news_status), clrWhite, news_bg_color);
     
-    // Update strategy performance table
-    UpdateStrategyPerformanceTable("Scalping", scalping_score);
-    UpdateStrategyPerformanceTable("Swing", swing_score);
-    UpdateStrategyPerformanceTable("Breakout", breakout_score);
-    UpdateStrategyPerformanceTable("MeanRev", mean_reversion_score);
+    // Update strategy performance table with real data
+    UpdateStrategyPerformanceTable("Scalping", 0, scalping_score);
+    UpdateStrategyPerformanceTable("Swing", 1, swing_score);
+    UpdateStrategyPerformanceTable("Breakout", 2, breakout_score);
+    UpdateStrategyPerformanceTable("MeanRev", 3, mean_reversion_score);
     
     // Update overall performance summary
     UpdateOverallPerformanceTable();
@@ -305,8 +481,10 @@ void UpdateDashboard()
 //+------------------------------------------------------------------+
 //| Update Strategy Performance Table                                |
 //+------------------------------------------------------------------+
-void UpdateStrategyPerformanceTable(string strategy_prefix, double score)
+void UpdateStrategyPerformanceTable(string strategy_prefix, int strategy_index, double score)
 {
+    StrategyPerformance stats = strategy_stats[strategy_index];
+    
     // Update score
     UpdateButton(strategy_prefix + "Score", StringFormat("%.2f", score));
     
@@ -315,17 +493,57 @@ void UpdateStrategyPerformanceTable(string strategy_prefix, double score)
     color status_bg_color = (score > 0.5) ? clrDarkGreen : clrDarkGray;
     UpdateButton(strategy_prefix + "Status", status, clrWhite, status_bg_color);
     
-    // Update trades count (placeholder)
-    UpdateButton(strategy_prefix + "Trades", "0");
+    // Update trades count
+    UpdateButton(strategy_prefix + "Trades", IntegerToString(stats.total_trades));
     
-    // Update win rate (placeholder)
-    UpdateButton(strategy_prefix + "WinRate", "0%");
+    // Update win rate with color coding
+    color win_rate_bg_color = clrDarkGray;
+    if(stats.win_rate > 0.6) win_rate_bg_color = clrDarkGreen;
+    else if(stats.win_rate < 0.4) win_rate_bg_color = clrDarkRed;
     
-    // Update profit (placeholder)
-    UpdateButton(strategy_prefix + "Profit", "$0.00");
+    string win_rate_text = "0%";
+    if(stats.total_trades > 0) {
+        win_rate_text = StringFormat("%.0f%%", stats.win_rate * 100);
+    }
+    UpdateButton(strategy_prefix + "WinRate", win_rate_text, clrWhite, win_rate_bg_color);
     
-    // Update positions count (placeholder)
-    UpdateButton(strategy_prefix + "Positions", "0");
+    // Update profit with color coding
+    color profit_bg_color = (stats.total_profit > 0) ? clrDarkGreen : clrDarkRed;
+    string profit_text = "0.00";
+    if(stats.total_trades > 0) {
+        profit_text = StringFormat("%.2f", stats.total_profit);
+    }
+    UpdateButton(strategy_prefix + "Profit", profit_text, clrWhite, profit_bg_color);
+    
+    // Update positions count with proper counting
+    int open_positions_count = CountOpenPositionsForStrategy(strategy_index);
+    string position_status = (open_positions_count > 0) ? IntegerToString(open_positions_count) : "0";
+    color position_bg_color = (open_positions_count > 0) ? clrDarkOrange : clrDarkGray;
+    UpdateButton(strategy_prefix + "Positions", position_status, clrWhite, position_bg_color);
+}
+
+//+------------------------------------------------------------------+
+//| Count Open Positions for Specific Strategy                       |
+//+------------------------------------------------------------------+
+int CountOpenPositionsForStrategy(int strategy_index)
+{
+    int count = 0;
+    string strategy_names[] = {"Scalping", "Swing", "Breakout", "MeanRev"};
+    string target_strategy = strategy_names[strategy_index];
+    
+    ENUM_STRATEGY strategy_enum = GetStrategyIndex(target_strategy);
+    ulong strategy_magic = GetStrategyMagicNumber(strategy_enum);
+    
+    for(int i = 0; i < PositionsTotal(); i++) {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket > 0 && PositionSelectByTicket(ticket)) {
+            if(PositionGetInteger(POSITION_MAGIC) == strategy_magic) {
+                count++;
+            }
+        }
+    }
+    
+    return count;
 }
 
 //+------------------------------------------------------------------+
@@ -333,7 +551,7 @@ void UpdateStrategyPerformanceTable(string strategy_prefix, double score)
 //+------------------------------------------------------------------+
 void UpdateOverallPerformanceTable()
 {
-    // Update active strategies count
+    // Update active strategies count based on scores
     int active_strategies = 0;
     if(scalping_score > 0.5) active_strategies++;
     if(swing_score > 0.5) active_strategies++;
@@ -342,11 +560,64 @@ void UpdateOverallPerformanceTable()
     
     UpdateButton("ActiveStrategiesLabel", StringFormat("Active: %d", active_strategies));
     
-    // Update overall win rate (placeholder)
-    UpdateButton("OverallWinRateLabel", "Win%: 0%");
+    // Calculate overall win rate
+    double overall_win_rate = CalculateOverallWinRate();
+    color win_rate_bg_color = clrDarkGray;
+    if(overall_win_rate > 0.6) win_rate_bg_color = clrDarkGreen;
+    else if(overall_win_rate < 0.4) win_rate_bg_color = clrDarkRed;
     
-    // Update overall profit factor (placeholder)
-    UpdateButton("OverallProfitFactorLabel", "PF: 0.00");
+    string overall_win_rate_text = "Win%: 0%";
+    if(overall_win_rate > 0) {
+        overall_win_rate_text = StringFormat("Win%%: %.0f%%", overall_win_rate * 100);
+    }
+    UpdateButton("OverallWinRateLabel", overall_win_rate_text, clrWhite, win_rate_bg_color);
+    
+    // Calculate overall profit factor
+    double overall_profit_factor = CalculateOverallProfitFactor();
+    color profit_factor_bg_color = clrDarkGray;
+    if(overall_profit_factor > 1.5) profit_factor_bg_color = clrDarkGreen;
+    else if(overall_profit_factor < 1.0) profit_factor_bg_color = clrDarkRed;
+    
+    string overall_pf_text = "PF: 0.00";
+    if(overall_profit_factor > 0) {
+        overall_pf_text = StringFormat("PF: %.2f", overall_profit_factor);
+    }
+    UpdateButton("OverallProfitFactorLabel", overall_pf_text, clrWhite, profit_factor_bg_color);
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Overall Win Rate                                       |
+//+------------------------------------------------------------------+
+double CalculateOverallWinRate()
+{
+    int total_trades = 0;
+    int total_wins = 0;
+    
+    for(int i = 0; i < 4; i++) {
+        total_trades += strategy_stats[i].total_trades;
+        total_wins += strategy_stats[i].winning_trades;
+    }
+    
+    return (total_trades > 0) ? (double)total_wins / total_trades : 0.0;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Overall Profit Factor                                  |
+//+------------------------------------------------------------------+
+double CalculateOverallProfitFactor()
+{
+    double total_profit = 0.0;
+    double total_loss = 0.0;
+    
+    for(int i = 0; i < 4; i++) {
+        if(strategy_stats[i].total_profit > 0) {
+            total_profit += strategy_stats[i].total_profit;
+        } else {
+            total_loss += MathAbs(strategy_stats[i].total_profit);
+        }
+    }
+    
+    return (total_loss > 0) ? total_profit / total_loss : 0.0;
 }
 
 //+------------------------------------------------------------------+
@@ -392,12 +663,12 @@ double GetCurrentATR()
 //+------------------------------------------------------------------+
 double AnalyzeScalping()
 {
-    // Implement Scalping strategy performance evaluation
-    // Calculate Drawdown, Win Rate, Avg Profit per Trade
-    // Assign weights and return a score
-    double drawdown = CalculateDrawdown("Scalping");
-    double win_rate = CalculateWinRate("Scalping");
-    double avg_profit = CalculateAvgProfit("Scalping");
+    // Use real performance data from strategy_stats
+    StrategyPerformance stats = strategy_stats[0]; // Scalping is index 0
+    
+    double drawdown = (stats.max_drawdown > 0) ? stats.max_drawdown / 100.0 : 0.1; // Convert to percentage
+    double win_rate = stats.win_rate;
+    double avg_profit = (stats.avg_profit > 0) ? stats.avg_profit / 100.0 : 0.002; // Convert to percentage
     
     double score = (1 - drawdown) * MaxDrawdownWeight + win_rate * WinRateWeight + avg_profit * AvgProfitWeight;
     return score;
@@ -405,10 +676,12 @@ double AnalyzeScalping()
 
 double AnalyzeSwingTrading()
 {
-    // Implement Swing Trading strategy performance evaluation
-    double drawdown = CalculateDrawdown("SwingTrading");
-    double win_rate = CalculateWinRate("SwingTrading");
-    double avg_profit = CalculateAvgProfit("SwingTrading");
+    // Use real performance data from strategy_stats
+    StrategyPerformance stats = strategy_stats[1]; // Swing is index 1
+    
+    double drawdown = (stats.max_drawdown > 0) ? stats.max_drawdown / 100.0 : 0.1;
+    double win_rate = stats.win_rate;
+    double avg_profit = (stats.avg_profit > 0) ? stats.avg_profit / 100.0 : 0.002;
     
     double score = (1 - drawdown) * MaxDrawdownWeight + win_rate * WinRateWeight + avg_profit * AvgProfitWeight;
     return score;
@@ -416,10 +689,12 @@ double AnalyzeSwingTrading()
 
 double AnalyzeBreakout()
 {
-    // Implement Breakout strategy performance evaluation
-    double drawdown = CalculateDrawdown("Breakout");
-    double win_rate = CalculateWinRate("Breakout");
-    double avg_profit = CalculateAvgProfit("Breakout");
+    // Use real performance data from strategy_stats
+    StrategyPerformance stats = strategy_stats[2]; // Breakout is index 2
+    
+    double drawdown = (stats.max_drawdown > 0) ? stats.max_drawdown / 100.0 : 0.1;
+    double win_rate = stats.win_rate;
+    double avg_profit = (stats.avg_profit > 0) ? stats.avg_profit / 100.0 : 0.002;
     
     double score = (1 - drawdown) * MaxDrawdownWeight + win_rate * WinRateWeight + avg_profit * AvgProfitWeight;
     return score;
@@ -427,38 +702,18 @@ double AnalyzeBreakout()
 
 double AnalyzeMeanReversion()
 {
-    // Implement Mean Reversion strategy performance evaluation
-    double drawdown = CalculateDrawdown("MeanReversion");
-    double win_rate = CalculateWinRate("MeanReversion");
-    double avg_profit = CalculateAvgProfit("MeanReversion");
+    // Use real performance data from strategy_stats
+    StrategyPerformance stats = strategy_stats[3]; // MeanReversion is index 3
+    
+    double drawdown = (stats.max_drawdown > 0) ? stats.max_drawdown / 100.0 : 0.1;
+    double win_rate = stats.win_rate;
+    double avg_profit = (stats.avg_profit > 0) ? stats.avg_profit / 100.0 : 0.002;
     
     double score = (1 - drawdown) * MaxDrawdownWeight + win_rate * WinRateWeight + avg_profit * AvgProfitWeight;
     return score;
 }
 
-//+------------------------------------------------------------------+
-//| Placeholder Functions for Performance Metrics                   |
-//+------------------------------------------------------------------+
-double CalculateDrawdown(string strategy)
-{
-    // Implement drawdown calculation for the given strategy
-    // Placeholder: return a dummy value
-    return 0.1; // 10% drawdown
-}
 
-double CalculateWinRate(string strategy)
-{
-    // Implement win rate calculation for the given strategy
-    // Placeholder: return a dummy value
-    return 0.6; // 60% win rate
-}
-
-double CalculateAvgProfit(string strategy)
-{
-    // Implement average profit per trade calculation for the given strategy
-    // Placeholder: return a dummy value
-    return 0.002; // Example: 0.2% profit per trade
-}
 
 //+------------------------------------------------------------------+
 //| Strategy Execution Functions                                    |
@@ -566,13 +821,13 @@ void ExecuteSwingTrading()
     // Buy Condition
     if(rsi[0] < 30 && current_price < ma_fast[0] && current_price > ma_slow[0])
     {
-        OpenBuyOrder("SwingTrading");
+        OpenBuyOrder("Swing");
     }
     
     // Sell Condition
     if(rsi[0] > 70 && current_price > ma_fast[0] && current_price < ma_slow[0])
     {
-        OpenSellOrder("SwingTrading");
+        OpenSellOrder("Swing");
     }
     
     // Release indicator handles
@@ -632,13 +887,13 @@ void ExecuteMeanReversion()
     // Buy Signal
     if(current_price < lower[0])
     {
-        OpenBuyOrder("MeanReversion");
+        OpenBuyOrder("MeanRev");
     }
     
     // Sell Signal
     if(current_price > upper[0])
     {
-        OpenSellOrder("MeanReversion");
+        OpenSellOrder("MeanRev");
     }
     
     // Release indicator handle
@@ -668,7 +923,7 @@ void OpenBuyOrder(string strategy)
     request.sl = sl;
     request.tp = tp;
     request.deviation = 10;
-    request.magic = MAGIC_NUMBER;
+    request.magic = GetStrategyMagicNumber(GetStrategyIndex(strategy));
     request.comment = "Buy Order - " + strategy;
     
     if(!OrderSend(request, result))
@@ -701,7 +956,7 @@ void OpenSellOrder(string strategy)
     request.sl = sl;
     request.tp = tp;
     request.deviation = 10;
-    request.magic = MAGIC_NUMBER;
+    request.magic = GetStrategyMagicNumber(GetStrategyIndex(strategy));
     request.comment = "Sell Order - " + strategy;
     
     if(!OrderSend(request, result))
@@ -773,7 +1028,7 @@ double CalculateStopLoss(string strategy)
     {
         sl_atr_multiplier = ScalpingSL_ATR_Multiplier;
     }
-    else if(StringCompare(strategy, "SwingTrading") == 0)
+    else if(StringCompare(strategy, "Swing") == 0)
     {
         sl_atr_multiplier = SwingSL_ATR_Multiplier;
     }
@@ -781,7 +1036,7 @@ double CalculateStopLoss(string strategy)
     {
         sl_atr_multiplier = BreakoutSL_ATR_Multiplier;
     }
-    else if(StringCompare(strategy, "MeanReversion") == 0)
+    else if(StringCompare(strategy, "MeanRev") == 0)
     {
         sl_atr_multiplier = MeanReversionSL_ATR_Multiplier;
     }
@@ -817,7 +1072,7 @@ double CalculateTakeProfit(string strategy)
     {
         tp_atr_multiplier = ScalpingTP_ATR_Multiplier;
     }
-    else if(StringCompare(strategy, "SwingTrading") == 0)
+    else if(StringCompare(strategy, "Swing") == 0)
     {
         tp_atr_multiplier = SwingTP_ATR_Multiplier;
     }
@@ -825,7 +1080,7 @@ double CalculateTakeProfit(string strategy)
     {
         tp_atr_multiplier = BreakoutTP_ATR_Multiplier;
     }
-    else if(StringCompare(strategy, "MeanReversion") == 0)
+    else if(StringCompare(strategy, "MeanRev") == 0)
     {
         tp_atr_multiplier = MeanReversionTP_ATR_Multiplier;
     }
